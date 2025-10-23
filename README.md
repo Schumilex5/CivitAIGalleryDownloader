@@ -8,4 +8,4 @@
 * Go to -> chrome://extensions/
 * Click "Load unpacked extension"
 * Navigate inside the extension folder when asked for location
-###### You can pin the extension now and start it with simply clicking it.
+###### You can pin the extension now and start it by clicking on it.
