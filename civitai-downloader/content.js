@@ -1,45 +1,59 @@
 (async () => {
-  console.log("🟢 Civitai fast auto-scroll downloader started");
+  // Create floating progress box
+  const box = document.createElement("div");
+  Object.assign(box.style, {
+    position: "fixed",
+    bottom: "20px",
+    right: "20px",
+    zIndex: "999999",
+    background: "rgba(0,0,0,0.8)",
+    color: "#0f0",
+    fontSize: "13px",
+    fontFamily: "monospace",
+    padding: "10px 14px",
+    borderRadius: "10px",
+    boxShadow: "0 0 10px rgba(0,0,0,0.5)",
+    whiteSpace: "pre-line",
+    pointerEvents: "none"
+  });
+  document.body.appendChild(box);
 
-  // Find the main gallery section
+  const log = (msg, color = "#0f0") => {
+    box.style.color = color;
+    box.textContent = msg;
+  };
+
+  log("🟢 Starting Civitai downloader…");
+
   const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
-  if (!gallery) {
-    console.log("❌ Gallery not found");
-    return;
-  }
+  if (!gallery) return log("❌ Gallery not found", "#f55");
 
-  // Find the right-arrow button
   const nextBtn = gallery.querySelector("button svg.tabler-icon-chevron-right")?.closest("button");
-  if (!nextBtn) {
-    console.log("❌ Next button not found");
-    return;
+
+  if (nextBtn) {
+    log("➡️ Auto-scrolling gallery…");
+    let prevCount = 0, sameCount = 0;
+    for (let i = 0; i < 300; i++) {
+      const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
+      if (imgs.length > prevCount) {
+        prevCount = imgs.length;
+        sameCount = 0;
+        log(`➡️ Loaded ${imgs.length} images…`);
+      } else if (++sameCount > 5) break;
+      nextBtn.click();
+      await new Promise(r => setTimeout(r, 50));
+    }
+  } else {
+    log("ℹ️ No next button found — static gallery");
   }
 
-  let prevCount = 0;
-  let sameCount = 0;
-
-  console.log("➡️ Auto-scrolling gallery...");
-  for (let i = 0; i < 300; i++) {
-    const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
-    if (imgs.length > prevCount) {
-      prevCount = imgs.length;
-      sameCount = 0;
-      console.log(`➡️ Loaded ${imgs.length} images...`);
-    } else if (++sameCount > 5) break;
-
-    nextBtn.click();
-    await new Promise((r) => setTimeout(r, 50)); // Fast scroll delay
-  }
-
-  console.log("📸 Scrolling done, collecting images...");
-
-  // Collect all unique image URLs
+  log("📸 Collecting images...");
   const seen = new Set();
   const urls = [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
-    .map((img) => img.src.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0])
-    .filter((u) => u && u.startsWith("https") && !seen.has(u) && seen.add(u));
+    .map(img => img.src.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0])
+    .filter(u => u && u.startsWith("https") && !seen.has(u) && seen.add(u));
 
-  console.log(`📥 Fetching ${urls.length} images...`);
+  log(`📥 Fetching ${urls.length} images…`);
 
   for (let i = 0; i < urls.length; i++) {
     try {
@@ -52,12 +66,13 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(a.href);
-      console.log(`✅ Saved ${i + 1}/${urls.length}`);
+      log(`✅ ${i + 1}/${urls.length} saved`);
     } catch (e) {
-      console.log(`❌ Failed ${i + 1}`, e);
+      log(`❌ Failed ${i + 1}`, "#f55");
     }
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise(r => setTimeout(r, 80));
   }
 
-  console.log("🟢 Done!");
+  log("🟢 Done!");
+  setTimeout(() => box.remove(), 4000);
 })();

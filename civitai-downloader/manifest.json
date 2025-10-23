@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Civitai Fast Auto-Scroll Downloader",
-  "version": "1.0",
-  "description": "Auto-scrolls Civitai galleries and downloads all images.",
+  "name": "Civitai Fast Auto-Downloader",
+  "description": "Automatically scrolls and downloads all images from a Civitai model gallery.",
+  "version": "1.2",
   "permissions": ["scripting", "activeTab"],
   "background": {
     "service_worker": "background.js"
@@ -10,10 +10,14 @@
   "action": {
     "default_title": "Civitai Downloader",
     "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
       "128": "icon.png"
     }
   },
-  "host_permissions": [
-    "*://civitai.com/*"
-  ]
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
 }
