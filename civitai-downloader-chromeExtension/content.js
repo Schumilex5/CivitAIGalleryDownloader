@@ -1,9 +1,8 @@
 (async () => {
-  // Create floating progress box
   const box = document.createElement("div");
   Object.assign(box.style, {
     position: "fixed",
-    bottom: "45px", // 25px higher
+    bottom: "45px",
     right: "20px",
     zIndex: "999999",
     background: "rgba(0,0,0,0.8)",
@@ -17,7 +16,6 @@
   });
   document.body.appendChild(box);
 
-  // Restart button
   const restartBtn = document.createElement("button");
   restartBtn.textContent = "Restart";
   Object.assign(restartBtn.style, {
@@ -91,7 +89,7 @@
     }
 
     log("🟢 Done!");
-    setTimeout(() => box.remove(), 5000); // close 5 seconds after done
+    setTimeout(() => box.remove(), 5000);
   };
 
   restartBtn.onclick = downloadGallery;
