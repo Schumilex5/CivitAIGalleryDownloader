@@ -32,8 +32,14 @@
     box.appendChild(restartBtn);
   };
 
-  const downloadGallery = async () => {
-    log("🟢 Starting Civitai downloader…");
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const cleanUrl = (u) =>
+    u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
+
+  // -------------------- IMAGE DOWNLOADER --------------------
+  const downloadImages = async () => {
+    log("🟢 Starting image downloader…");
 
     const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
     if (!gallery) return log("❌ Gallery not found", "#f55");
@@ -51,7 +57,7 @@
           log(`➡️ Loaded ${imgs.length} images…`);
         } else if (++sameCount > 5) break;
         nextBtn.click();
-        await new Promise(r => setTimeout(r, 50));
+        await sleep(50);
       }
     } else {
       log("ℹ️ No next button found — static gallery");
@@ -60,11 +66,10 @@
     log("📸 Collecting images…");
     const seen = new Set();
     const urls = [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
-      .map(img => img.src.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0])
+      .map(img => cleanUrl(img.src))
       .filter(u => u && u.startsWith("https") && !seen.has(u) && seen.add(u));
 
     log(`📥 Fetching ${urls.length} images…`);
-
     for (let i = 0; i < urls.length; i++) {
       try {
         const res = await fetch(urls[i]);
@@ -81,17 +86,59 @@
         a.click();
         a.remove();
         URL.revokeObjectURL(a.href);
-        log(`✅ ${i + 1}/${urls.length} saved`);
+        log(`✅ ${i + 1}/${urls.length} images saved`);
       } catch (e) {
         log(`❌ Failed ${i + 1}`, "#f55");
       }
-      await new Promise(r => setTimeout(r, 80));
+      await sleep(80);
     }
 
-    log("🟢 Done!");
+    log("🟢 Images done! Starting videos…");
+    await sleep(500);
+  };
+
+  // -------------------- VIDEO DOWNLOADER --------------------
+  const downloadVideos = async () => {
+    log("🟢 Starting video downloader…");
+    const root = document.querySelector('[class*="ModelVersionDetails_mainSection__"]') || document;
+    const seen = new Set();
+
+    const mp4Urls = [...root.querySelectorAll('video source[type="video/mp4"]')]
+      .map(s => s.src?.split("?")[0])
+      .filter(u => u && u.startsWith("https") && !seen.has(u) && seen.add(u));
+
+    if (!mp4Urls.length) return log("⚠️ No MP4 sources found on page", "#f55");
+
+    log(`📥 Found ${mp4Urls.length} MP4 files, downloading…`);
+    for (let i = 0; i < mp4Urls.length; i++) {
+      const url = mp4Urls[i];
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `civitai_video_${i + 1}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(a.href);
+        log(`🎞️ Saved ${i + 1}/${mp4Urls.length}`);
+      } catch (e) {
+        log(`❌ Failed ${i + 1}: ${e}`, "#f55");
+      }
+      await sleep(150);
+    }
+
+    log("🟢 All done!");
     setTimeout(() => box.remove(), 5000);
   };
 
-  restartBtn.onclick = downloadGallery;
-  await downloadGallery();
+  // -------------------- MAIN FLOW --------------------
+  const runAll = async () => {
+    await downloadImages();
+    await downloadVideos();
+  };
+
+  restartBtn.onclick = runAll;
+  await runAll();
 })();

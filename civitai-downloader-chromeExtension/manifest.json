@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Civitai Fast Downloader",
-  "description": "Downloads all images (including GIFs and PNGs) from Civitai galleries.",
-  "version": "1.0",
+  "description": "Downloads all images and mp4 videos from Civitai galleries automatically.",
+  "version": "2.0",
   "permissions": ["scripting", "activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "Civitai Downloader",
     "default_icon": {
@@ -18,8 +21,5 @@
     "32": "icon32.png",
     "48": "icon48.png",
     "128": "icon128.png"
-  },
-  "background": {
-    "service_worker": "background.js"
   }
 }
