@@ -9,3 +9,6 @@
 * Click "Load unpacked extension"
 * Navigate inside the extension folder when asked for location
 ###### You can pin the extension now and start it by clicking on it.
+
+## Known Bugs:
+- I met one gallery among hundreds where images were hosted elsewhere and I got a header error, Ill think about patching it if I encounter it again
