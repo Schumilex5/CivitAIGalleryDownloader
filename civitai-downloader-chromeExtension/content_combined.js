@@ -33,7 +33,6 @@
   };
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
   const cleanUrl = (u) =>
     u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
 
@@ -107,7 +106,11 @@
       .map(s => s.src?.split("?")[0])
       .filter(u => u && u.startsWith("https") && !seen.has(u) && seen.add(u));
 
-    if (!mp4Urls.length) return log("⚠️ No MP4 sources found on page", "#f55");
+    if (!mp4Urls.length) {
+      log("⚠️ No MP4 sources found on page", "#f55");
+      setTimeout(() => box.remove(), 2500); // 👈 fade away after 2.5s
+      return;
+    }
 
     log(`📥 Found ${mp4Urls.length} MP4 files, downloading…`);
     for (let i = 0; i < mp4Urls.length; i++) {
