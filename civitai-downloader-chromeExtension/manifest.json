@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Civitai Fast Downloader",
   "description": "Downloads all images and mp4 videos from Civitai galleries automatically.",
-  "version": "2.0",
+  "version": "3.2",
   "permissions": ["scripting", "activeTab"],
   "background": {
     "service_worker": "background.js"
