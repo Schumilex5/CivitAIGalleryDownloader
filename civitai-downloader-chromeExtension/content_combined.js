@@ -1,28 +1,101 @@
 (async () => {
-  // ===== Keys & Defaults =====
-  const POS_KEY = "civitai_dl_pos_v32";
-  const SIZE_KEY = "civitai_dl_size_v32";
-  const SETTINGS_KEY = "civitai_dl_settings_v32";
+  // =========================
+  // Keys / Defaults / Limits
+  // =========================
+  const POS_KEY = "civitai_dl_pos_v33";
+  const SIZE_KEY = "civitai_dl_size_v33";
+  const SETTINGS_KEY = "civitai_dl_settings_v33";
+
   const DEFAULT_SETTINGS = {
     concurrency: 3,
     keepVisible: true,
-    wallpaper: null,
+    wallpaper: null,           // data URL (compressed)
     wallpaperAlpha: 0.35,
-    keepWallpaperVisible: true,
+    keepWallpaperVisible: true // enforce min height cap so top of portrait is visible
   };
-  const DEFAULT_SIZE = { width: 345, height: 340 };
+
+  // visual sizing defaults
+  const DEFAULT_SIZE = { width: 345, height: 340 }; // width is 15px less than before
   const MIN_HEIGHT = 260;
-  const MAX_AUTO_HEIGHT = 520; // allow more room for Settings
+  const MAX_AUTO_HEIGHT_MAIN = 520;   // max when auto-adjusting
+  const MAX_AUTO_HEIGHT_SETTINGS = 640;
   const SETTINGS_MARGIN = 20;
 
-  // ===== State =====
+  // =================================
+  // State
+  // =================================
   let settings = loadSettings();
   let isPaused = false;
   let currentControllers = new Set();
   let finishedIndicatorShown = false;
   let savedMainHeight = (loadSize().height || DEFAULT_SIZE.height);
 
-  // ===== UI: Shell =====
+  // =================================
+  // Helpers
+  // =================================
+  function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const cleanUrl = (u) => u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
+
+  function loadSettings() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+      return s ? { ...DEFAULT_SETTINGS, ...s } : { ...DEFAULT_SETTINGS };
+    } catch { return { ...DEFAULT_SETTINGS }; }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch (err) {
+      console.warn("⚠️ Settings too large, not saved:", err);
+    }
+  }
+  function loadSize() {
+    try { return JSON.parse(localStorage.getItem(SIZE_KEY)) || DEFAULT_SIZE; }
+    catch { return DEFAULT_SIZE; }
+  }
+  function saveSize() {
+    const r = box.getBoundingClientRect();
+    localStorage.setItem(SIZE_KEY, JSON.stringify({ width: r.width, height: r.height }));
+  }
+  function restorePosition() {
+    try {
+      const s = JSON.parse(localStorage.getItem(POS_KEY) || "null");
+      if (s) { box.style.left = s.left + "px"; box.style.top = s.top + "px"; }
+      else { box.style.right = "20px"; box.style.bottom = "45px"; }
+    } catch { box.style.right = "20px"; box.style.bottom = "45px"; }
+  }
+
+  // compress + base64 the wallpaper to fit localStorage
+  async function fileToBase64Compressed(file) {
+    // Use createImageBitmap for faster decode when available
+    let bmp;
+    try { bmp = await createImageBitmap(file); }
+    catch {
+      // fallback to Image
+      bmp = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+    }
+    const canvas = document.createElement("canvas");
+    // limit max dims so dataURL stays small
+    const maxW = 1280, maxH = 720;
+    const scale = Math.min(maxW / bmp.width, maxH / bmp.height, 1);
+    canvas.width = Math.max(1, Math.floor(bmp.width * scale));
+    canvas.height = Math.max(1, Math.floor(bmp.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    try { bmp.close && bmp.close(); } catch {}
+    // compress to jpeg (smaller than png/webp typically)
+    return canvas.toDataURL("image/jpeg", 0.8);
+  }
+
+  // =================================
+  // UI: Shell
+  // =================================
   const box = document.createElement("div");
   const savedSize = loadSize();
   Object.assign(box.style, {
@@ -45,7 +118,7 @@
   });
   restorePosition();
 
-  // Wallpaper layer (top-anchored)
+  // wallpaper layer (top anchored)
   const bg = document.createElement("div");
   Object.assign(bg.style, {
     position: "absolute",
@@ -56,10 +129,15 @@
     zIndex: "-1",
     transition: "opacity 0.3s ease",
   });
+  function applyWallpaper() {
+    if (settings.wallpaper) bg.style.backgroundImage = `url(${settings.wallpaper})`;
+    else bg.style.backgroundImage = "";
+    bg.style.opacity = settings.wallpaperAlpha;
+  }
   applyWallpaper();
   box.appendChild(bg);
 
-  // Header
+  // header (drag handle)
   const header = document.createElement("div");
   Object.assign(header.style, {
     display: "flex",
@@ -76,14 +154,13 @@
   const closeBtn = iconBtn("✖", "Close");
   header.append(title, gearBtn, closeBtn);
 
-  // Views
+  // main view
   const mainView = document.createElement("div");
   const settingsView = document.createElement("div");
   settingsView.style.display = "none";
 
-  // Main controls
   const controls = document.createElement("div");
-  Object.assign(controls.style, { display: "flex", gap: "8px", margin: "8px 10px" });
+  Object.assign(controls.style, { display: "flex", gap: "8px", margin: "8px 10px", flexWrap: "wrap" });
   const restartBtn = pillBtn("Restart");
   const stopBtn = pillBtn("Stop");
   const resumeBtn = pillBtn("Resume");
@@ -93,7 +170,6 @@
   const body = document.createElement("div");
   Object.assign(body.style, { whiteSpace: "pre-line", lineHeight: "1.25", padding: "0 10px" });
 
-  // Progress bars wrap (bars appear only when active)
   const barsWrap = document.createElement("div");
   Object.assign(barsWrap.style, {
     display: "grid",
@@ -113,11 +189,11 @@
     padding: "4px",
     borderTop: "1px solid rgba(255,255,255,0.15)",
   });
-  credit.textContent = "Made by Mia Iceberg — v3.2";
+  credit.textContent = "Made by Mia Iceberg — v3.3";
 
   mainView.append(controls, body, barsWrap, statusLine, credit);
 
-  // Settings
+  // settings view
   const backRow = document.createElement("div");
   Object.assign(backRow.style, { display: "flex", alignItems: "center", gap: "8px", margin: "8px" });
   const backBtn = pillBtn("← Back");
@@ -133,28 +209,30 @@
   const keepRow = checkboxField("Keep popup visible (no auto-close)", settings.keepVisible);
   const visRow = checkboxField("Keep wallpaper fully visible (auto-adjust height)", settings.keepWallpaperVisible);
 
+  // wallpaper picker
   const wallRow = document.createElement("div");
   wallRow.style.color = "#dfd";
   wallRow.innerHTML = `<div>Select wallpaper image:</div>`;
   const wallInput = document.createElement("input");
   wallInput.type = "file"; wallInput.accept = "image/*";
   const clearWallBtn = pillBtn("Clear");
-  wallInput.onchange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const base64 = await fileToBase64(file);
-  settings.wallpaper = base64;
-  saveSettings();
-  applyWallpaper();
-};
 
-clearWallBtn.onclick = () => {
-  settings.wallpaper = null;
-  saveSettings();
-  applyWallpaper();
-};
+  wallInput.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const base64 = await fileToBase64Compressed(file);
+    settings.wallpaper = base64;
+    saveSettings();
+    applyWallpaper();
+  };
+  clearWallBtn.onclick = () => {
+    settings.wallpaper = null;
+    saveSettings();
+    applyWallpaper();
+  };
   wallRow.append(wallInput, clearWallBtn);
 
+  // wallpaper opacity
   const alphaRow = document.createElement("div");
   alphaRow.style.color = "#dfd";
   const alphaLbl = document.createElement("div");
@@ -162,30 +240,32 @@ clearWallBtn.onclick = () => {
   const alphaSlider = document.createElement("input");
   alphaSlider.type = "range"; alphaSlider.min = "0"; alphaSlider.max = "1"; alphaSlider.step = "0.05";
   alphaSlider.value = settings.wallpaperAlpha;
-  alphaSlider.oninput = () => (bg.style.opacity = alphaSlider.value);
+  alphaSlider.oninput = () => { settings.wallpaperAlpha = +alphaSlider.value; applyWallpaper(); saveSettings(); };
   alphaRow.append(alphaLbl, alphaSlider);
 
   const restoreBtn = pillBtn("Restore Defaults");
   const saveBtn = pillBtn("Save");
+
   settingsForm.append(concRow.row, keepRow.row, visRow.row, wallRow, alphaRow, restoreBtn, saveBtn);
   settingsView.append(backRow, settingsForm);
 
+  // mount
   box.append(header, mainView, settingsView);
   document.body.append(box);
 
-  // ===== Drag + Resize + Persist =====
+  // =================================
+  // UI Interactions
+  // =================================
   initDrag(header);
   initResize();
 
   gearBtn.onclick = () => {
     savedMainHeight = parseFloat(box.style.height) || savedMainHeight;
-    setView("settings");
     autoGrowForSettings();
   };
   backBtn.onclick = () => {
     setView("main");
-    // Restore to saved main height (within bounds)
-    const target = clamp(savedMainHeight, MIN_HEIGHT, MAX_AUTO_HEIGHT);
+    const target = clamp(savedMainHeight, MIN_HEIGHT, MAX_AUTO_HEIGHT_MAIN);
     box.style.height = target + "px";
   };
   closeBtn.onclick = () => (box.style.display = "none");
@@ -194,21 +274,36 @@ clearWallBtn.onclick = () => {
     settings.concurrency = clamp(+concRow.input.value, 1, 10);
     settings.keepVisible = keepRow.input.checked;
     settings.keepWallpaperVisible = visRow.input.checked;
-    settings.wallpaperAlpha = +alphaSlider.value;
     saveSettings();
     setView("main");
-    // restore main height
-    const target = clamp(savedMainHeight, MIN_HEIGHT, MAX_AUTO_HEIGHT);
+    const target = clamp(savedMainHeight, MIN_HEIGHT, MAX_AUTO_HEIGHT_MAIN);
     box.style.height = target + "px";
   };
 
-  restoreBtn.onclick = restoreDefaults;
+  restoreBtn.onclick = () => {
+    localStorage.removeItem(POS_KEY);
+    localStorage.removeItem(SIZE_KEY);
+    localStorage.removeItem(SETTINGS_KEY);
+    box.remove();
+    alert("Defaults restored. Click the extension again to reopen.");
+  };
 
   restartBtn.onclick = () => { isPaused = false; runAll(); };
   stopBtn.onclick = () => { stopAllActive(); isPaused = true; };
   resumeBtn.onclick = () => { isPaused = false; runAll(); };
 
-  // ===== UI helpers =====
+  function setView(v) { mainView.style.display = v === "settings" ? "none" : ""; settingsView.style.display = v === "settings" ? "" : "none"; }
+  function autoGrowForSettings() {
+    // show to measure
+    settingsView.style.display = "";
+    const headerH = header.getBoundingClientRect().height;
+    const desired = Math.min(
+      Math.max(MIN_HEIGHT, Math.ceil(settingsView.scrollHeight + headerH + SETTINGS_MARGIN)),
+      Math.min(MAX_AUTO_HEIGHT_SETTINGS, window.innerHeight - 20)
+    );
+    box.style.height = desired + "px";
+    setView("settings");
+  }
   function iconBtn(txt, title) {
     const b = document.createElement("button");
     b.textContent = txt;
@@ -251,41 +346,8 @@ clearWallBtn.onclick = () => {
     row.append(input, span);
     return { row, input };
   }
-  function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
-  async function fileToBase64(file) {
-  const img = await createImageBitmap(file);
-  const canvas = document.createElement("canvas");
-  const scale = Math.min(1280 / img.width, 720 / img.height, 1); // shrink large images
-  canvas.width = img.width * scale;
-  canvas.height = img.height * scale;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.8); // compress
-}
 
-  function setView(v) { mainView.style.display = v === "settings" ? "none" : ""; settingsView.style.display = v === "settings" ? "" : "none"; }
-  function loadSettings() { try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || ""); return s ? { ...DEFAULT_SETTINGS, ...s } : { ...DEFAULT_SETTINGS }; } catch { return { ...DEFAULT_SETTINGS }; } }
-  function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
-  function applyWallpaper() {
-  if (settings.wallpaper) {
-    bg.style.backgroundImage = `url(${settings.wallpaper})`;
-  } else {
-    bg.style.backgroundImage = "";
-  }
-  bg.style.opacity = settings.wallpaperAlpha;
-}
-  function loadSize() { try { return JSON.parse(localStorage.getItem(SIZE_KEY)) || DEFAULT_SIZE; } catch { return DEFAULT_SIZE; } }
-  function saveSize() {
-    const r = box.getBoundingClientRect();
-    localStorage.setItem(SIZE_KEY, JSON.stringify({ width: r.width, height: r.height }));
-  }
-  function restorePosition() {
-    try {
-      const s = JSON.parse(localStorage.getItem(POS_KEY) || "null");
-      if (s) { box.style.left = s.left + "px"; box.style.top = s.top + "px"; }
-      else { box.style.right = "20px"; box.style.bottom = "45px"; }
-    } catch { box.style.right = "20px"; box.style.bottom = "45px"; }
-  }
+  // drag (position persists)
   function initDrag(h) {
     let drag = false, dx = 0, dy = 0;
     h.addEventListener("mousedown", e => {
@@ -308,43 +370,29 @@ clearWallBtn.onclick = () => {
       localStorage.setItem(POS_KEY, JSON.stringify({ left: r.left, top: r.top }));
     });
   }
+
+  // resize (size persists + min/max for wallpaper visibility)
   function initResize() {
     new ResizeObserver(() => {
       saveSize();
       if (settings.keepWallpaperVisible) {
         const h = parseFloat(box.style.height) || box.getBoundingClientRect().height;
         if (h < MIN_HEIGHT + 0.5) box.style.height = MIN_HEIGHT + "px";
-        if (h > MAX_AUTO_HEIGHT + 0.5) box.style.height = MAX_AUTO_HEIGHT + "px";
+        if (h > MAX_AUTO_HEIGHT_SETTINGS + 0.5) box.style.height = MAX_AUTO_HEIGHT_SETTINGS + "px";
       }
     }).observe(box);
   }
-  function autoGrowForSettings() {
-    // expand so settings content (incl. buttons) fits
-    const headerH = header.getBoundingClientRect().height;
-    // temporarily show to measure
-    settingsView.style.display = "";
-    const desired = Math.min(
-      Math.max(MIN_HEIGHT, Math.ceil(settingsView.scrollHeight + headerH + SETTINGS_MARGIN)),
-      Math.min(MAX_AUTO_HEIGHT, window.innerHeight - 20)
-    );
-    settingsView.style.display = "none"; // revert; setView will re-show
-    box.style.height = desired + "px";
-    setView("settings");
-  }
-  function restoreDefaults() {
-    localStorage.removeItem(POS_KEY);
-    localStorage.removeItem(SIZE_KEY);
-    localStorage.removeItem(SETTINGS_KEY);
-    box.remove();
-    alert("Defaults restored. Click the extension again to reopen.");
-  }
 
-  // ===== Logging / Status =====
+  // =================================
+  // Logging / Status
+  // =================================
   const log = (m, c = "#0f0") => { body.style.color = c; body.textContent = m; };
   const setStatus = (t) => (statusLine.textContent = t);
 
-  // ===== Progress Bars (on-demand, fade-out) =====
-  const workerBars = new Map(); // workerIndex -> {row,label,fill}
+  // =================================
+  // Progress bars (on-demand, fade out)
+  // =================================
+  const workerBars = new Map(); // i -> {row,label,fill}
   function createWorkerBar(i) {
     const row = document.createElement("div");
     Object.assign(row.style, {
@@ -371,11 +419,8 @@ clearWallBtn.onclick = () => {
     row.append(label, track);
     barsWrap.append(row);
 
-    // fade in
-    requestAnimationFrame(() => {
-      row.style.opacity = "1";
-      row.style.maxHeight = "50px";
-    });
+    requestAnimationFrame(() => { row.style.opacity = "1"; row.style.maxHeight = "50px"; });
+
     workerBars.set(i, { row, label, fill });
     return workerBars.get(i);
   }
@@ -393,14 +438,58 @@ clearWallBtn.onclick = () => {
     setTimeout(() => {
       if (barsWrap.contains(b.row)) barsWrap.removeChild(b.row);
       workerBars.delete(i);
-      // If no active bars left, popup shrinks naturally (no-op here)
     }, 220);
   }
   function hideAllWorkerBars() {
     [...workerBars.keys()].forEach(hideWorkerBar);
   }
 
-  // ===== Networking helpers =====
+  // =================================
+  // Auto-Scroll Gallery
+  // =================================
+  async function loadAllGalleryImages(gallery) {
+    const nextBtn = gallery.querySelector("button svg.tabler-icon-chevron-right")?.closest("button");
+    if (!nextBtn) {
+      log("ℹ️ No next button — static gallery");
+      return;
+    }
+    log("➡️ Auto-scrolling gallery…");
+    let prevCount = 0, sameCount = 0;
+    for (let i = 0; i < 300; i++) {
+      const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
+      if (imgs.length > prevCount) {
+        prevCount = imgs.length;
+        sameCount = 0;
+        log(`➡️ Loaded ${imgs.length} images…`);
+      } else if (++sameCount > 5) break;
+      nextBtn.click();
+      await sleep(80);
+    }
+    log(`✅ Gallery fully loaded (${prevCount} images)`);
+  }
+
+  // =================================
+  // Collectors (scoped to main gallery only)
+  // =================================
+  function collectGallery() {
+    return document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
+  }
+  function collectImages(gallery) {
+    const s = new Set();
+    return [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
+      .map(i => cleanUrl(i.src))
+      .filter(u => u && u.startsWith("https") && !/\.webp(\?|$)/i.test(u) && !s.has(u) && s.add(u));
+  }
+  function collectVideos(gallery) {
+    const s = new Set();
+    return [...gallery.querySelectorAll('video source[type="video/mp4"]')]
+      .map(v => v.src?.split("?")[0])
+      .filter(u => u && u.startsWith("https") && !s.has(u) && s.add(u));
+  }
+
+  // =================================
+  // Network helpers
+  // =================================
   function stopAllActive() {
     for (const c of currentControllers) { try { c.abort(); } catch {} }
     currentControllers.clear();
@@ -409,10 +498,7 @@ clearWallBtn.onclick = () => {
     const controller = new AbortController();
     currentControllers.add(controller);
     const { signal } = controller;
-
-    const to = setTimeout(() => {
-      try { controller.abort(); } catch {}
-    }, timeoutMs);
+    const to = setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
 
     const res = await fetch(url, { signal, cache: "no-store" });
     clearTimeout(to);
@@ -438,7 +524,7 @@ clearWallBtn.onclick = () => {
         const pct = (received / total) * 100;
         setWorkerProgress(workerIndex, pct, `${label} (${pct.toFixed(0)}%)`);
       } else {
-        // unknown size -> pulse
+        // pulse when unknown content-length
         const cycle = (received % (512 * 1024)) / (512 * 1024);
         setWorkerProgress(workerIndex, cycle * 100, `${label} (stream)`);
       }
@@ -458,7 +544,9 @@ clearWallBtn.onclick = () => {
     URL.revokeObjectURL(u);
   }
 
-  // ===== Queue (Parallel) =====
+  // =================================
+  // Parallel Queue
+  // =================================
   async function runQueue(items, kind) {
     if (!items.length) return;
 
@@ -470,7 +558,7 @@ clearWallBtn.onclick = () => {
     const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
     async function worker(i) {
       while (true) {
-        if (isPaused) return; // paused → stop loop, resume restarts
+        if (isPaused) return; // paused → stop loop
 
         const idx = nextIndex++;
         if (idx >= total) { hideWorkerBar(i); return; }
@@ -485,14 +573,13 @@ clearWallBtn.onclick = () => {
           setWorkerProgress(i, 100, `Saved ${idx + 1}`);
         } catch (e) {
           if (e.name === "AbortError" || e.message === "Paused") {
-            // return to allow clean stop; remaining will be re-run on resume/restart
             hideWorkerBar(i);
             return;
           } else {
             setWorkerProgress(i, 0, `fail ${idx + 1}`);
           }
         }
-        // fade out this worker’s bar after finishing its item
+        // smooth fade out of bar
         setTimeout(() => hideWorkerBar(i), 180);
         await new Promise(r => requestAnimationFrame(r));
         await sleep(kind === "images" ? 200 : 340);
@@ -501,38 +588,31 @@ clearWallBtn.onclick = () => {
     await Promise.all(workers);
   }
 
-  // ===== Collectors =====
-  const cleanUrl = (u) => u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
-  function collectImages() {
-  const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
-  if (!gallery) return [];
-  const s = new Set();
-  return [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
-    .map(i => cleanUrl(i.src))
-    .filter(u => u && u.startsWith("https") && !/\.webp(\?|$)/i.test(u) && !s.has(u) && s.add(u));
-}
-
-function collectVideos() {
-  const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
-  if (!gallery) return [];
-  const s = new Set();
-  return [...gallery.querySelectorAll('video source[type="video/mp4"]')]
-    .map(v => v.src?.split("?")[0])
-    .filter(u => u && u.startsWith("https") && !s.has(u) && s.add(u));
-}
-
-  // ===== Main flow =====
+  // =================================
+  // Main Flow
+  // =================================
   async function runAll() {
     finishedIndicatorShown = false;
     body.textContent = "";
     setStatus("—");
     isPaused = false;
+    hideAllWorkerBars();
+
+    log("🟢 Starting image downloader…");
+    const gallery = collectGallery();
+    if (!gallery) {
+      log("❌ Gallery not found", "#f55");
+      return;
+    }
+
+    // auto-scroll to load all
+    await loadAllGalleryImages(gallery);
 
     // IMAGES
-    log("🟢 Starting image downloader…");
-    const imgs = collectImages();
+    const imgs = collectImages(gallery);
     const imgItems = imgs.map((url, idx) => ({
-      url, timeout: 15000,
+      url,
+      timeout: 15000,
       name: (b) => {
         const t = (b.type || "").toLowerCase();
         let ext = "jpg";
@@ -547,18 +627,19 @@ function collectVideos() {
     await sleep(400);
 
     // VIDEOS
-    const vids = collectVideos();
+    const vids = collectVideos(gallery);
     if (!vids.length) {
       log("⚠️ No MP4 videos on page", "#f55");
       setTimeout(() => {
         if (!settings.keepVisible) box.remove();
-        else body.textContent = ""; // clear notice if staying visible
+        else body.textContent = ""; // clear notice if keeping visible
       }, 2500);
       return;
     }
     log(`🎞 Found ${vids.length} videos`);
     const vidItems = vids.map((url, idx) => ({
-      url, timeout: 20000,
+      url,
+      timeout: 20000,
       name: () => `civitai_video_${idx + 1}.mp4`
     }));
     await runQueue(vidItems, "videos");
@@ -572,25 +653,13 @@ function collectVideos() {
     title.textContent = "✅ Downloads complete!";
     title.style.color = "#8f8";
     setTimeout(() => { title.textContent = "Civitai Downloader"; title.style.color = "#9f9"; }, 4000);
-    // auto-shrink: no bars visible now; keep body clean
     body.textContent = "";
     if (!settings.keepVisible) setTimeout(() => box.remove(), 3000);
   }
 
-  // ===== Utils =====
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  async function saveBlob(blob, name) {
-    const u = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = u; a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    await new Promise(r => requestAnimationFrame(r));
-    URL.revokeObjectURL(u);
-  }
-
-  // ===== Start =====
+  // =================================
+  // Start
+  // =================================
   await runAll();
 
 })();
