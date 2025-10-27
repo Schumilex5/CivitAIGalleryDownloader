@@ -56,7 +56,7 @@
     zIndex: "-1",
     transition: "opacity 0.3s ease",
   });
-  if (settings.wallpaper) bg.style.backgroundImage = `url(${settings.wallpaper})`;
+  applyWallpaper();
   box.appendChild(bg);
 
   // Header
@@ -140,13 +140,19 @@
   wallInput.type = "file"; wallInput.accept = "image/*";
   const clearWallBtn = pillBtn("Clear");
   wallInput.onchange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const base64 = await fileToBase64(file);
-    settings.wallpaper = base64;
-    bg.style.backgroundImage = `url(${base64})`;
-  };
-  clearWallBtn.onclick = () => { settings.wallpaper = null; bg.style.backgroundImage = ""; };
+  const file = e.target.files[0];
+  if (!file) return;
+  const base64 = await fileToBase64(file);
+  settings.wallpaper = base64;
+  saveSettings();
+  applyWallpaper();
+};
+
+clearWallBtn.onclick = () => {
+  settings.wallpaper = null;
+  saveSettings();
+  applyWallpaper();
+};
   wallRow.append(wallInput, clearWallBtn);
 
   const alphaRow = document.createElement("div");
@@ -246,17 +252,28 @@
     return { row, input };
   }
   function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
-  async function fileToBase64(f) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(f);
-    });
-  }
+  async function fileToBase64(file) {
+  const img = await createImageBitmap(file);
+  const canvas = document.createElement("canvas");
+  const scale = Math.min(1280 / img.width, 720 / img.height, 1); // shrink large images
+  canvas.width = img.width * scale;
+  canvas.height = img.height * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8); // compress
+}
+
   function setView(v) { mainView.style.display = v === "settings" ? "none" : ""; settingsView.style.display = v === "settings" ? "" : "none"; }
   function loadSettings() { try { const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || ""); return s ? { ...DEFAULT_SETTINGS, ...s } : { ...DEFAULT_SETTINGS }; } catch { return { ...DEFAULT_SETTINGS }; } }
   function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+  function applyWallpaper() {
+  if (settings.wallpaper) {
+    bg.style.backgroundImage = `url(${settings.wallpaper})`;
+  } else {
+    bg.style.backgroundImage = "";
+  }
+  bg.style.opacity = settings.wallpaperAlpha;
+}
   function loadSize() { try { return JSON.parse(localStorage.getItem(SIZE_KEY)) || DEFAULT_SIZE; } catch { return DEFAULT_SIZE; } }
   function saveSize() {
     const r = box.getBoundingClientRect();
@@ -487,17 +504,22 @@
   // ===== Collectors =====
   const cleanUrl = (u) => u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
   function collectImages() {
-    const s = new Set();
-    return [...document.querySelectorAll('img[src*="image.civitai.com"]')]
-      .map(i => cleanUrl(i.src))
-      .filter(u => u && u.startsWith("https") && !/\.webp(\?|$)/i.test(u) && !s.has(u) && s.add(u));
-  }
-  function collectVideos() {
-    const s = new Set();
-    return [...document.querySelectorAll('video source[type="video/mp4"]')]
-      .map(v => v.src?.split("?")[0])
-      .filter(u => u && u.startsWith("https") && !s.has(u) && s.add(u));
-  }
+  const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
+  if (!gallery) return [];
+  const s = new Set();
+  return [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
+    .map(i => cleanUrl(i.src))
+    .filter(u => u && u.startsWith("https") && !/\.webp(\?|$)/i.test(u) && !s.has(u) && s.add(u));
+}
+
+function collectVideos() {
+  const gallery = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
+  if (!gallery) return [];
+  const s = new Set();
+  return [...gallery.querySelectorAll('video source[type="video/mp4"]')]
+    .map(v => v.src?.split("?")[0])
+    .filter(u => u && u.startsWith("https") && !s.has(u) && s.add(u));
+}
 
   // ===== Main flow =====
   async function runAll() {
