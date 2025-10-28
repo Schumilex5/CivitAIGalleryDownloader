@@ -1,3 +1,5 @@
+Hi. This was made for personal use, it may have bugs I don't know about, but it works for me and does the things i want, if you meet errors you can let me know tho.
+
 ### installation:
 * Download the extension folder
 * Go to -> chrome://extensions/
@@ -6,5 +8,4 @@
 ###### You can pin the extension now and start it by clicking on it.
 
 ## Known Bugs:
-- Sometimes you need to click the restart button if the download is stuck, if it happenes too much or stops progressing disabling then re-enabling the extension should fix it
-- I met one gallery among hundreds where images were hosted elsewhere and I got a header error, Ill think about patching it if I encounter it again
+-
