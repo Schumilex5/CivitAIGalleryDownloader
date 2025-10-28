@@ -485,7 +485,8 @@ const savedSize = loadSize();
     const v = Math.max(0, Math.min(100, pct | 0));
     b.fill.style.width = v + "%";
     b.label.textContent = text || "";
-  }
+  
+    __lastProgressTime = Date.now();}
   function hideWorkerBar(i) {
     const b = workerBars.get(i);
     if (!b) return;
@@ -810,3 +811,30 @@ const savedSize = loadSize();
   await runAll();
 
 })();
+
+
+// ===================================
+// Watchdog for stalled progress (auto-restart)
+// ===================================
+let __lastProgressTime = Date.now();
+let __restartCount = 0;
+const __maxRestarts = 3;
+
+const __checkStall = async () => {
+  while (true) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (Date.now() - __lastProgressTime > 5000) {
+      if (__restartCount < __maxRestarts) {
+        console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${__restartCount+1}/${__maxRestarts})`);
+        __restartCount++;
+        try { stopAllActive(); hideAllWorkerBars(); } catch {}
+        try { await runAll(); } catch {}
+        __lastProgressTime = Date.now();
+      } else {
+        console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
+        break;
+      }
+    }
+  }
+};
+__checkStall();
