@@ -1,3 +1,4 @@
+// content_combined.js
 (async () => {
   // =========================
   // Keys / Defaults / Limits
@@ -15,9 +16,9 @@
   };
 
   // visual sizing defaults
-  const DEFAULT_SIZE = { width: 345, height: 340 }; // width is 15px less than before
+  const DEFAULT_SIZE = { width: 345, height: 340 };
   const MIN_HEIGHT = 260;
-  const MAX_AUTO_HEIGHT_MAIN = 520;   // max when auto-adjusting
+  const MAX_AUTO_HEIGHT_MAIN = 520;
   const MAX_AUTO_HEIGHT_SETTINGS = 640;
   const SETTINGS_MARGIN = 20;
 
@@ -35,7 +36,35 @@
   // =================================
   function clamp(v, a, b) { return Math.min(Math.max(v, a), b); }
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const cleanUrl = (u) => u.replace(/\/anim=.*?\/|,optimized=true|,width=\d+/g, "/").split("?")[0];
+
+  // More permissive cleaner for Civitai image CDN URLs
+  function cleanUrl(u) {
+  if (!u) return "";
+
+  let out = u
+    // remove flags like /anim=false,width=450,optimized=true/
+    .replace(/\/anim=[^/]*,?[^/]*,?[^/]*\//g, "/")
+    .replace(/,optimized=true/g, "")
+    .replace(/,width=\d+/g, "")
+    .replace(/,height=\d+/g, "")
+    .split("?")[0];
+
+  // collapse any "//" that appear *after* the domain name but not the protocol
+  out = out.replace(/(^https?:\/\/[^/]+)\/+/i, "$1/"); // keep single slash after domain
+  out = out.replace(/([^:])\/{2,}/g, "$1/");           // collapse leftover double slashes in path
+
+  // if the URL accidentally ends with a slash before the file name, remove it
+  out = out.replace(/\/([A-Za-z0-9_-]+\.(?:jpe?g|png|gif|webp))$/i, "/$1");
+
+  return out;
+}
+
+
+  function getImgUrl(imgEl) {
+    // prefer currentSrc when <picture> is used
+    const u = imgEl.currentSrc || imgEl.src || "";
+    return cleanUrl(u);
+  }
 
   function loadSettings() {
     try {
@@ -68,11 +97,9 @@
 
   // compress + base64 the wallpaper to fit localStorage
   async function fileToBase64Compressed(file) {
-    // Use createImageBitmap for faster decode when available
     let bmp;
     try { bmp = await createImageBitmap(file); }
     catch {
-      // fallback to Image
       bmp = await new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
@@ -81,7 +108,6 @@
       });
     }
     const canvas = document.createElement("canvas");
-    // limit max dims so dataURL stays small
     const maxW = 1280, maxH = 720;
     const scale = Math.min(maxW / bmp.width, maxH / bmp.height, 1);
     canvas.width = Math.max(1, Math.floor(bmp.width * scale));
@@ -89,7 +115,6 @@
     const ctx = canvas.getContext("2d");
     ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     try { bmp.close && bmp.close(); } catch {}
-    // compress to jpeg (smaller than png/webp typically)
     return canvas.toDataURL("image/jpeg", 0.8);
   }
 
@@ -294,7 +319,6 @@
 
   function setView(v) { mainView.style.display = v === "settings" ? "none" : ""; settingsView.style.display = v === "settings" ? "" : "none"; }
   function autoGrowForSettings() {
-    // show to measure
     settingsView.style.display = "";
     const headerH = header.getBoundingClientRect().height;
     const desired = Math.min(
@@ -445,46 +469,115 @@
   }
 
   // =================================
-  // Auto-Scroll Gallery
+  // Auto-Scroll Gallery (with page fallback)
   // =================================
   async function loadAllGalleryImages(gallery) {
+    // Try the carousel "next" button first
     const nextBtn = gallery.querySelector("button svg.tabler-icon-chevron-right")?.closest("button");
-    if (!nextBtn) {
-      log("ℹ️ No next button — static gallery");
+    if (nextBtn) {
+      log("➡️ Auto-scrolling gallery…");
+      let prevCount = 0, sameCount = 0;
+      for (let i = 0; i < 300; i++) {
+        const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
+        if (imgs.length > prevCount) {
+          prevCount = imgs.length;
+          sameCount = 0;
+          log(`➡️ Loaded ${imgs.length} images…`);
+        } else if (++sameCount > 5) break;
+        nextBtn.click();
+        await sleep(80);
+      }
+      log(`✅ Gallery fully loaded (${prevCount} images)`);
       return;
     }
-    log("➡️ Auto-scrolling gallery…");
-    let prevCount = 0, sameCount = 0;
-    for (let i = 0; i < 300; i++) {
-      const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
-      if (imgs.length > prevCount) {
-        prevCount = imgs.length;
-        sameCount = 0;
-        log(`➡️ Loaded ${imgs.length} images…`);
-      } else if (++sameCount > 5) break;
-      nextBtn.click();
+
+    // Fallback: scroll the whole page to trigger lazy loads
+    log("➡️ Scrolling page to trigger lazy image loads…");
+    let lastSeen = 0, stable = 0;
+    for (let i = 0; i < 400; i++) {
+      window.scrollBy(0, Math.max(200, window.innerHeight - 120));
       await sleep(80);
+      const imgs = document.querySelectorAll('img[src*="image.civitai.com"], img[data-src*="image.civitai.com"]');
+      if (imgs.length > lastSeen) {
+        lastSeen = imgs.length;
+        stable = 0;
+        log(`➡️ Discovered ${imgs.length} images…`);
+      } else if (++stable > 8) {
+        break;
+      }
     }
-    log(`✅ Gallery fully loaded (${prevCount} images)`);
+    // small bounce up to catch images loading near the top/center
+    window.scrollTo({ top: 0, behavior: "instant" });
+    await sleep(120);
+    log(`✅ Page scroll complete (roughly ${lastSeen} images discovered)`);
   }
 
   // =================================
-  // Collectors (scoped to main gallery only)
+  // Gallery detection + Collectors
   // =================================
-  function collectGallery() {
-    return document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
+  function findFirstGalleryRoot() {
+    // 1) Prefer the main section (your original logic)
+    const preferred = document.querySelector('[class*="ModelVersionDetails_mainSection__"]');
+    if (preferred) return preferred;
+
+    // 2) Heuristic: choose the first container with >= 3 civitai images
+    const candidates = Array.from(document.querySelectorAll("main, section, div"))
+      .filter(el => {
+        // avoid nav/headers
+        const role = el.getAttribute("role") || "";
+        if (/banner|navigation/i.test(role)) return false;
+        const imgs = el.querySelectorAll('img[src*="image.civitai.com"], img[data-src*="image.civitai.com"]');
+        return imgs.length >= 3;
+      });
+    if (candidates.length) return candidates[0];
+
+    // 3) Fallback to body (we’ll still filter out avatars/cards later)
+    return document.body;
   }
-  function collectImages(gallery) {
+
+  function collectImages(scopeEl) {
     const s = new Set();
-    return [...gallery.querySelectorAll('img[src*="image.civitai.com"]')]
-      .map(i => cleanUrl(i.src))
-      .filter(u => u && u.startsWith("https") && !/\.webp(\?|$)/i.test(u) && !s.has(u) && s.add(u));
+    // Filter out UI/avatars/cards/logos/small invisibles
+    const isBadContainer = (el) => {
+      const c = el.closest([
+        '[class*="CreatorCard_"]',
+        '[class*="mantine-Avatar"]',
+        '[class*="Header_"]',
+        '[class*="Footer_"]',
+        '[class*="Logo"]',
+      ].join(",")); 
+      return !!c;
+    };
+
+    const allImgs = Array.from(scopeEl.querySelectorAll('img[src*="image.civitai.com"], img[data-src*="image.civitai.com"]'));
+    return allImgs
+      .map(i => ({ i, url: getImgUrl(i) }))
+      .filter(({ i, url }) => {
+        if (!url || !/^https?:\/\//i.test(url)) return false;
+        if (isBadContainer(i)) return false;
+        if (!i.getBoundingClientRect) return false;
+        const r = i.getBoundingClientRect();
+        // must be visible-ish and not tiny UI img
+        if (r.width < 50 || r.height < 50) return false;
+        if (getComputedStyle(i).visibility === "hidden" || getComputedStyle(i).display === "none") return false;
+        return true;
+      })
+      .map(({ url }) => url)
+      .filter(u => !/\.webp(\?|$)/i.test(u)) // stick to jpeg/png/gif
+      .filter(u => !s.has(u) && s.add(u));
   }
-  function collectVideos(gallery) {
+
+  function collectVideos(scopeEl) {
     const s = new Set();
-    return [...gallery.querySelectorAll('video source[type="video/mp4"]')]
-      .map(v => v.src?.split("?")[0])
-      .filter(u => u && u.startsWith("https") && !s.has(u) && s.add(u));
+    // grab page-wide MP4s (some embeds live outside the main section)
+    const srcs = [
+      ...scopeEl.querySelectorAll('video source[type="video/mp4"]'),
+      ...document.querySelectorAll('video source[type="video/mp4"]')
+    ]
+      .map(v => (v.src || v.getAttribute("src") || "").split("?")[0])
+      .filter(Boolean);
+
+    return srcs.filter(u => /^https?:\/\//i.test(u) && !s.has(u) && s.add(u));
   }
 
   // =================================
@@ -524,7 +617,6 @@
         const pct = (received / total) * 100;
         setWorkerProgress(workerIndex, pct, `${label} (${pct.toFixed(0)}%)`);
       } else {
-        // pulse when unknown content-length
         const cycle = (received % (512 * 1024)) / (512 * 1024);
         setWorkerProgress(workerIndex, cycle * 100, `${label} (stream)`);
       }
@@ -558,7 +650,7 @@
     const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
     async function worker(i) {
       while (true) {
-        if (isPaused) return; // paused → stop loop
+        if (isPaused) return;
 
         const idx = nextIndex++;
         if (idx >= total) { hideWorkerBar(i); return; }
@@ -579,7 +671,6 @@
             setWorkerProgress(i, 0, `fail ${idx + 1}`);
           }
         }
-        // smooth fade out of bar
         setTimeout(() => hideWorkerBar(i), 180);
         await new Promise(r => requestAnimationFrame(r));
         await sleep(kind === "images" ? 200 : 340);
@@ -599,18 +690,53 @@
     hideAllWorkerBars();
 
     log("🟢 Starting image downloader…");
-    const gallery = collectGallery();
+    const gallery = findFirstGalleryRoot();
     if (!gallery) {
-      log("❌ Gallery not found", "#f55");
+      log("❌ No suitable gallery root found", "#f55");
       return;
     }
 
-    // auto-scroll to load all
+    // auto-scroll/page-scroll to load everything
     await loadAllGalleryImages(gallery);
 
     // IMAGES
     const imgs = collectImages(gallery);
-    const imgItems = imgs.map((url, idx) => ({
+    if (!imgs.length) {
+      // second-chance: collect page-wide (handles hero EdgeImage-only pages)
+      const pageWide = collectImages(document.body);
+      if (pageWide.length) {
+        log(`ℹ️ Using page-wide image fallback (${pageWide.length} imgs)…`);
+        await downloadImages(pageWide);
+      } else {
+        log("⚠️ No images found", "#f55");
+      }
+    } else {
+      await downloadImages(imgs);
+    }
+
+    log("🟢 Images done! Preparing videos…");
+    await sleep(400);
+
+    // VIDEOS (page-wide to catch embeds)
+    const vids = collectVideos(gallery);
+    if (!vids.length) {
+      log("⚠️ No MP4 videos on page");
+      showFinished();
+      return;
+    }
+    log(`🎞 Found ${vids.length} videos`);
+    const vidItems = vids.map((url, idx) => ({
+      url,
+      timeout: 20000,
+      name: () => `civitai_video_${idx + 1}.mp4`
+    }));
+    await runQueue(vidItems, "videos");
+
+    showFinished();
+  }
+
+  async function downloadImages(urls) {
+    const imgItems = urls.map((url, idx) => ({
       url,
       timeout: 15000,
       name: (b) => {
@@ -623,28 +749,6 @@
       }
     }));
     await runQueue(imgItems, "images");
-    log("🟢 Images done! Preparing videos…");
-    await sleep(400);
-
-    // VIDEOS
-    const vids = collectVideos(gallery);
-    if (!vids.length) {
-      log("⚠️ No MP4 videos on page", "#f55");
-      setTimeout(() => {
-        if (!settings.keepVisible) box.remove();
-        else body.textContent = ""; // clear notice if keeping visible
-      }, 2500);
-      return;
-    }
-    log(`🎞 Found ${vids.length} videos`);
-    const vidItems = vids.map((url, idx) => ({
-      url,
-      timeout: 20000,
-      name: () => `civitai_video_${idx + 1}.mp4`
-    }));
-    await runQueue(vidItems, "videos");
-
-    showFinished();
   }
 
   function showFinished() {
