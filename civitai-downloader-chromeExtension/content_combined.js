@@ -1,4 +1,34 @@
 // content_combined.js
+
+// =======================
+// Single-instance control
+// =======================
+if (window.__CIVITAI_DL_ACTIVE__) {
+  console.warn("[CivitAI Script] Cleaning up existing instance before start.");
+  try {
+    window.__CIVITAI_DL_ACTIVE__.abort?.();
+    document.querySelector("#civitai-dl-popup")?.remove();
+  } catch {}
+}
+window.__CIVITAI_DL_ACTIVE__ = new AbortController();
+const __stopSignal = window.__CIVITAI_DL_ACTIVE__.signal;
+
+
+// ===================================
+// Auto stop previous instance + delay
+// ===================================
+(async () => {
+  try { __CIVITAI_STOP(); } catch {}
+  await new Promise(r => setTimeout(r, 300));
+})();
+// Add a shared stop function
+function __CIVITAI_STOP() {
+  console.warn("[CivitAI Script] Manual stop triggered.");
+  window.__CIVITAI_DL_ACTIVE__?.abort?.();
+  document.querySelector("#civitai-dl-popup")?.remove();
+}
+
+
 (async () => {
   // =========================
   // Keys / Defaults / Limits
@@ -122,7 +152,9 @@
   // UI: Shell
   // =================================
   const box = document.createElement("div");
-  const savedSize = loadSize();
+  
+  box.id = "civitai-dl-popup";
+const savedSize = loadSize();
   Object.assign(box.style, {
     position: "fixed",
     zIndex: "999999",
@@ -313,7 +345,7 @@
     alert("Defaults restored. Click the extension again to reopen.");
   };
 
-  restartBtn.onclick = () => { isPaused = false; runAll(); };
+  restartBtn.onclick = () => { stopAllActive(); isPaused = false; hideAllWorkerBars(); runAll(); };
   stopBtn.onclick = () => { stopAllActive(); isPaused = true; };
   resumeBtn.onclick = () => { isPaused = false; runAll(); };
 
@@ -488,6 +520,17 @@
         await sleep(80);
       }
       log(`✅ Gallery fully loaded (${prevCount} images)`);
+      log("⏳ Waiting for images to finish rendering…");
+
+      let stable = 0, lastCount = 0;
+      for (let i = 0; i < 30; i++) {
+        const imgs = gallery.querySelectorAll('img[src*="image.civitai.com"]');
+        if (imgs.length === lastCount) stable++;
+        else { stable = 0; lastCount = imgs.length; }
+        if (stable >= 3) break; // stop after stable count for ~300ms
+        await sleep(100);
+      }
+      log("✅ DOM stabilized — starting downloads…");
       return;
     }
 

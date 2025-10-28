@@ -1,12 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Civitai Fast Downloader",
-  "description": "Downloads all images and mp4 videos from Civitai galleries automatically.",
-  "version": "3.3",
+  "version": "3.3.1",
+  "description": "Downloads all images and videos from the first Civitai gallery — with auto-restart, parallel downloads, wallpaper, and progress UI.",
   "permissions": ["scripting", "activeTab"],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_title": "Civitai Downloader",
     "default_icon": {
@@ -15,6 +12,9 @@
       "48": "icon48.png",
       "128": "icon128.png"
     }
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "icons": {
     "16": "icon16.png",
