@@ -61,6 +61,8 @@ function __CIVITAI_STOP() {
   // State
   // =================================
   let settings = loadSettings();
+  let __downloadsActive = false; // Track if downloads are active
+
   let isPaused = false;
   let currentControllers = new Set();
   let finishedIndicatorShown = false;
@@ -251,7 +253,7 @@ const savedSize = loadSize();
     padding: "4px",
     borderTop: "1px solid rgba(255,255,255,0.15)",
   });
-  credit.textContent = "Made by Mia Iceberg — v3.3";
+  credit.textContent = "Made by Mia Iceberg — v3.4";
 
   mainView.append(controls, body, barsWrap, statusLine, credit);
 
@@ -659,7 +661,7 @@ const savedSize = loadSize();
 
     const chunks = [];
     let received = 0;
-    while (true) {
+    while (__downloadsActive) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
@@ -700,7 +702,7 @@ const savedSize = loadSize();
 
     const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
     async function worker(i) {
-      while (true) {
+      while (__downloadsActive) {
         if (isPaused) return;
 
         const idx = nextIndex++;
@@ -734,6 +736,7 @@ const savedSize = loadSize();
   // Main Flow
   // =================================
   async function runAll() {
+    __downloadsActive = true;
     finishedIndicatorShown = false;
     body.textContent = "";
     setStatus("—");
@@ -773,6 +776,7 @@ const savedSize = loadSize();
     if (!vids.length) {
       log("⚠️ No MP4 videos on page");
       showFinished();
+    __downloadsActive = false;
       return;
     }
     log(`🎞 Found ${vids.length} videos`);
@@ -784,6 +788,7 @@ const savedSize = loadSize();
     await runQueue(vidItems, "videos");
 
     showFinished();
+    __downloadsActive = false;
   }
 
   async function downloadImages(urls) {
@@ -824,7 +829,7 @@ const savedSize = loadSize();
   
 
   const __checkStall = async () => {
-    while (true) {
+    while (__downloadsActive) {
       await new Promise(r => setTimeout(r, 1000));
       if (Date.now() - __lastProgressTime > 5000) {
         if (__restartCount < __maxRestarts) {
