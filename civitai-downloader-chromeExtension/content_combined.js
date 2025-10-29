@@ -1,3 +1,7 @@
+(function(){
+'use strict';
+// Watchdog state placed early so helpers can access it
+var __lastProgressTime = Date.now(), __restartCount = 0, __maxRestarts = 3;
 // content_combined.js
 
 // =======================
@@ -15,12 +19,13 @@ const __stopSignal = window.__CIVITAI_DL_ACTIVE__.signal;
 
 
 // ===================================
-// Auto stop previous instance + delay
+// (REMOVED) Auto stop previous instance + delay
 // ===================================
-(async () => {
-  try { __CIVITAI_STOP(); } catch {}
-  await new Promise(r => setTimeout(r, 300));
-})();
+// The previous version called __CIVITAI_STOP() here, which also removed the
+// just-created AbortController and popup, sometimes breaking the first run.
+// That logic is redundant because we already clean up above.
+
+
 // Add a shared stop function
 function __CIVITAI_STOP() {
   console.warn("[CivitAI Script] Manual stop triggered.");
@@ -581,16 +586,17 @@ const savedSize = loadSize();
 
   function collectImages(scopeEl) {
     const s = new Set();
-    // Filter out UI/avatars/cards/logos/small invisibles
+    // Filter out UI/avatars/cards/logos/small invisibles + description section
     const isBadContainer = (el) => {
-      const c = el.closest([
+      const selector = [
         '[class*="CreatorCard_"]',
         '[class*="mantine-Avatar"]',
         '[class*="Header_"]',
         '[class*="Footer_"]',
         '[class*="Logo"]',
-      ].join(",")); 
-      return !!c;
+        '.mantine-TypographyStylesProvider-root' // description area
+      ].join(",");
+      return !!el.closest(selector);
     };
 
     const allImgs = Array.from(scopeEl.querySelectorAll('img[src*="image.civitai.com"], img[data-src*="image.civitai.com"]'));
@@ -598,6 +604,7 @@ const savedSize = loadSize();
       .map(i => ({ i, url: getImgUrl(i) }))
       .filter(({ i, url }) => {
         if (!url || !/^https?:\/\//i.test(url)) return false;
+        if (url.includes("/images/civitai-default-account-bg.png")) return false; // profile bg
         if (isBadContainer(i)) return false;
         if (!i.getBoundingClientRect) return false;
         const r = i.getBoundingClientRect();
@@ -810,31 +817,31 @@ const savedSize = loadSize();
   // =================================
   await runAll();
 
-})();
+  // ===================================
+  // Watchdog for stalled progress (auto-restart)
+  // (Moved inside IIFE so it can call local functions)
+  // ===================================
+  
 
-
-// ===================================
-// Watchdog for stalled progress (auto-restart)
-// ===================================
-let __lastProgressTime = Date.now();
-let __restartCount = 0;
-const __maxRestarts = 3;
-
-const __checkStall = async () => {
-  while (true) {
-    await new Promise(r => setTimeout(r, 1000));
-    if (Date.now() - __lastProgressTime > 5000) {
-      if (__restartCount < __maxRestarts) {
-        console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${__restartCount+1}/${__maxRestarts})`);
-        __restartCount++;
-        try { stopAllActive(); hideAllWorkerBars(); } catch {}
-        try { await runAll(); } catch {}
-        __lastProgressTime = Date.now();
-      } else {
-        console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
-        break;
+  const __checkStall = async () => {
+    while (true) {
+      await new Promise(r => setTimeout(r, 1000));
+      if (Date.now() - __lastProgressTime > 5000) {
+        if (__restartCount < __maxRestarts) {
+          console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${
+            __restartCount+1}/${__maxRestarts})`);
+          __restartCount++;
+          try { stopAllActive(); hideAllWorkerBars(); } catch {}
+          try { await runAll(); } catch {}
+          __lastProgressTime = Date.now();
+        } else {
+          console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
+          break;
+        }
       }
     }
-  }
-};
-__checkStall();
+  };
+  __checkStall();
+
+})();
+})();
