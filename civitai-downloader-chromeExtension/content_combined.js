@@ -1,7 +1,3 @@
-(function(){
-'use strict';
-// Watchdog state placed early so helpers can access it
-var __lastProgressTime = Date.now(), __restartCount = 0, __maxRestarts = 3;
 // content_combined.js
 
 // =======================
@@ -19,13 +15,12 @@ const __stopSignal = window.__CIVITAI_DL_ACTIVE__.signal;
 
 
 // ===================================
-// (REMOVED) Auto stop previous instance + delay
+// Auto stop previous instance + delay
 // ===================================
-// The previous version called __CIVITAI_STOP() here, which also removed the
-// just-created AbortController and popup, sometimes breaking the first run.
-// That logic is redundant because we already clean up above.
-
-
+(async () => {
+  try { __CIVITAI_STOP(); } catch {}
+  await new Promise(r => setTimeout(r, 300));
+})();
 // Add a shared stop function
 function __CIVITAI_STOP() {
   console.warn("[CivitAI Script] Manual stop triggered.");
@@ -61,8 +56,6 @@ function __CIVITAI_STOP() {
   // State
   // =================================
   let settings = loadSettings();
-  let __downloadsActive = false; // Track if downloads are active
-
   let isPaused = false;
   let currentControllers = new Set();
   let finishedIndicatorShown = false;
@@ -253,7 +246,7 @@ const savedSize = loadSize();
     padding: "4px",
     borderTop: "1px solid rgba(255,255,255,0.15)",
   });
-  credit.textContent = "Made by Mia Iceberg — v3.4";
+  credit.textContent = "Made by Mia Iceberg — v3.5";
 
   mainView.append(controls, body, barsWrap, statusLine, credit);
 
@@ -588,17 +581,16 @@ const savedSize = loadSize();
 
   function collectImages(scopeEl) {
     const s = new Set();
-    // Filter out UI/avatars/cards/logos/small invisibles + description section
+    // Filter out UI/avatars/cards/logos/small invisibles
     const isBadContainer = (el) => {
-      const selector = [
+      const c = el.closest([
         '[class*="CreatorCard_"]',
         '[class*="mantine-Avatar"]',
         '[class*="Header_"]',
         '[class*="Footer_"]',
         '[class*="Logo"]',
-        '.mantine-TypographyStylesProvider-root' // description area
-      ].join(",");
-      return !!el.closest(selector);
+      ].join(",")); 
+      return !!c;
     };
 
     const allImgs = Array.from(scopeEl.querySelectorAll('img[src*="image.civitai.com"], img[data-src*="image.civitai.com"]'));
@@ -606,7 +598,6 @@ const savedSize = loadSize();
       .map(i => ({ i, url: getImgUrl(i) }))
       .filter(({ i, url }) => {
         if (!url || !/^https?:\/\//i.test(url)) return false;
-        if (url.includes("/images/civitai-default-account-bg.png")) return false; // profile bg
         if (isBadContainer(i)) return false;
         if (!i.getBoundingClientRect) return false;
         const r = i.getBoundingClientRect();
@@ -621,17 +612,35 @@ const savedSize = loadSize();
   }
 
   function collectVideos(scopeEl) {
-    const s = new Set();
-    // grab page-wide MP4s (some embeds live outside the main section)
-    const srcs = [
-      ...scopeEl.querySelectorAll('video source[type="video/mp4"]'),
-      ...document.querySelectorAll('video source[type="video/mp4"]')
-    ]
-      .map(v => (v.src || v.getAttribute("src") || "").split("?")[0])
-      .filter(Boolean);
+  const s = new Set();
+  const badVideo = (el) => {
+    if (!el) return true;
+    // Skip uploader/profile videos directly or nested inside creator card areas
+    if (el.matches('[class*="EdgeVideo_iosScroll_"], [class*="CreatorCard_"], [class*="CreatorCard_profileDetailsContainer"]'))
+      return true;
+    if (el.closest('[class*="EdgeVideo_iosScroll_"], [class*="CreatorCard_"], [class*="CreatorCard_profileDetailsContainer"]'))
+      return true;
+    if (el.closest('[class*="mantine-Avatar"], [class*="Header_"], [class*="Footer_"], [class*="Logo"]'))
+      return true;
+    return false;
+  };
 
-    return srcs.filter(u => /^https?:\/\//i.test(u) && !s.has(u) && s.add(u));
-  }
+  const sources = Array.from(scopeEl.querySelectorAll('video source'))
+    .concat(Array.from(document.querySelectorAll('video source')));
+
+  const list = sources
+    .map(v => ({ el: v.closest('video'), url: (v.src || v.getAttribute('src') || '').split('?')[0] }))
+    .filter(({ el, url }) => {
+      if (!url || !/^https?:\/\//i.test(url)) return false;
+      if (badVideo(el)) return false;
+      const r = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
+      if (r.width < 300 || r.height < 200) return false;
+      return true;
+    });
+
+  return list.map(({ url }) => url).filter(u => !s.has(u) && s.add(u));
+}
+
 
   // =================================
   // Network helpers
@@ -661,7 +670,7 @@ const savedSize = loadSize();
 
     const chunks = [];
     let received = 0;
-    while (__downloadsActive) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       chunks.push(value);
@@ -702,7 +711,7 @@ const savedSize = loadSize();
 
     const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
     async function worker(i) {
-      while (__downloadsActive) {
+      while (true) {
         if (isPaused) return;
 
         const idx = nextIndex++;
@@ -736,7 +745,6 @@ const savedSize = loadSize();
   // Main Flow
   // =================================
   async function runAll() {
-    __downloadsActive = true;
     finishedIndicatorShown = false;
     body.textContent = "";
     setStatus("—");
@@ -776,7 +784,6 @@ const savedSize = loadSize();
     if (!vids.length) {
       log("⚠️ No MP4 videos on page");
       showFinished();
-    __downloadsActive = false;
       return;
     }
     log(`🎞 Found ${vids.length} videos`);
@@ -788,7 +795,6 @@ const savedSize = loadSize();
     await runQueue(vidItems, "videos");
 
     showFinished();
-    __downloadsActive = false;
   }
 
   async function downloadImages(urls) {
@@ -822,31 +828,100 @@ const savedSize = loadSize();
   // =================================
   await runAll();
 
-  // ===================================
-  // Watchdog for stalled progress (auto-restart)
-  // (Moved inside IIFE so it can call local functions)
-  // ===================================
-  
+})();
 
-  const __checkStall = async () => {
-    while (__downloadsActive) {
-      await new Promise(r => setTimeout(r, 1000));
-      if (Date.now() - __lastProgressTime > 5000) {
-        if (__restartCount < __maxRestarts) {
-          console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${
-            __restartCount+1}/${__maxRestarts})`);
-          __restartCount++;
-          try { stopAllActive(); hideAllWorkerBars(); } catch {}
-          try { await runAll(); } catch {}
-          __lastProgressTime = Date.now();
-        } else {
-          console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
-          break;
-        }
+
+// ===================================
+// Watchdog for stalled progress (auto-restart)
+// ===================================
+let __lastProgressTime = Date.now();
+let __restartCount = 0;
+const __maxRestarts = 3;
+
+const __checkStall = async () => {
+  while (true) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (Date.now() - __lastProgressTime > 5000) {
+      if (__restartCount < __maxRestarts) {
+        console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${__restartCount+1}/${__maxRestarts})`);
+        __restartCount++;
+        try { stopAllActive(); hideAllWorkerBars(); } catch {}
+        try { await runAll(); } catch {}
+        __lastProgressTime = Date.now();
+      } else {
+        console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
+        break;
       }
     }
-  };
-  __checkStall();
+  }
+};
+__checkStall();
 
-})();
-})();
+
+
+/* ==== Overrides injected for v3.5 ==== */
+
+function collectVideos(scopeEl) {
+  const s = new Set();
+  const badVideo = (el) => {
+    if (!el) return true;
+    return !!el.closest('[class*="CreatorCard_"], [class*="EdgeVideo_iosScroll_"], [class*="mantine-Avatar"], [class*="Header_"], [class*="Footer_"], [class*="Logo"]');
+  };
+  const sources = Array.from(scopeEl.querySelectorAll('video source[type="video/mp4"]'))
+    .concat(Array.from(document.querySelectorAll('video source[type="video/mp4"]')));
+
+  const list = sources
+    .map(v => ({ el: v.closest('video'), url: (v.src || v.getAttribute('src') || '').split('?')[0] }))
+    .filter(({ el, url }) => {
+      if (!url || !/^https?:\/\//i.test(url)) return false;
+      if (badVideo(el)) return false;
+      const r = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
+      if (r.width < 300 || r.height < 200) return false;
+      return true;
+    });
+
+  return list.map(({ url }) => url).filter(u => !s.has(u) && s.add(u));
+}
+
+async function runQueue(items, kind) {
+  if (!items || !items.length) return;
+
+  let nextIndex = 0;
+  let completed = 0;
+  const total = items.length;
+  setStatus(`${kind}: 0/${total}`);
+
+  const getNext = () => (nextIndex < total ? nextIndex++ : null);
+  const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
+
+  async function worker(i) {
+    while (true) {
+      if (isPaused) return;
+      const idx = getNext();
+      if (idx === null) { hideWorkerBar(i); return; }
+
+      const it = items[idx];
+      try {
+        setWorkerProgress(i, 0, `${kind.slice(0, -1)} ${idx + 1}/${total}`);
+        const blob = await fetchWithProgress(it.url, it.timeout, i, `${kind.slice(0, -1)} ${idx + 1}/${total}`);
+        await saveBlob(blob, it.name(blob));
+        completed++;
+        setStatus(`${kind}: ${completed}/${total}`);
+        setWorkerProgress(i, 100, `Saved ${idx + 1}`);
+      } catch (e) {
+        if (e && (e.name === "AbortError" || e.message === "Paused")) {
+          hideWorkerBar(i);
+          return;
+        } else {
+          setWorkerProgress(i, 0, `fail ${idx + 1}`);
+        }
+      }
+      setTimeout(() => hideWorkerBar(i), 180);
+      await new Promise(r => requestAnimationFrame(r));
+      await sleep(kind === "images" ? 200 : 340);
+    }
+  }
+
+  await Promise.all(workers);
+}
+
