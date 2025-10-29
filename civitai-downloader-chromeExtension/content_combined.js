@@ -4,7 +4,7 @@
   // =======================
   // Config & State (closure)
   // =======================
-  const VERSION = "v3.7.4";
+  const VERSION = "v3.7.5";
   const WALL_SETTINGS_KEY = "civitai_dl_wallpaper_settings";
   const WIN_STATE_KEY = "civitai_dl_window_state";
   const DEFAULTS = { concurrency: 3, keepVisible: true, wallpaper: null, alpha: 0.35 };
@@ -20,6 +20,32 @@
 
   // Active network controllers for in-flight downloads
   const currentControllers = new Set();
+  // === Duplicate-skip (temporary for this session) & filename helpers ===
+  const downloadedNames = new Set();
+
+  function sanitizeFilename(name) {
+    if (!name) return "file";
+    name = name.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim();
+    name = name.replace(/[.\s]+$/, "");
+    return name || "file";
+  }
+  function extFromBlob(blob) {
+    const t = String(blob?.type || "").toLowerCase();
+    if (t.includes("png")) return "png";
+    if (t.includes("gif")) return "gif";
+    if (t.includes("webp")) return "webp";
+    if (t.includes("mp4")) return "mp4";
+    if (t.includes("jpeg") || t.includes("jpg")) return "jpg";
+    return "";
+  }
+  function filenameFromUrl(url) {
+    try {
+      const clean = (url || "").split("?")[0];
+      const seg = clean.split("/").filter(Boolean).pop() || "";
+      return seg;
+    } catch { return ""; }
+  }
+
 
   // =======================
   // Utilities
@@ -138,7 +164,7 @@
   });
   const title = document.createElement("div");
   Object.assign(title.style, { fontWeight: "700", color: "#9f9", flex: "1 1 auto" });
-  title.textContent = `Civitai Downloader — ${VERSION}`;
+  title.textContent = `${VERSION}`;
   const btnSettings = iconBtn("⚙️", "Settings");
   const btnRestart = pillBtn("Restart");
   const btnStop = pillBtn("Stop");
@@ -520,6 +546,9 @@
   }
 
   async function saveBlob(blob, filename) {
+    filename = sanitizeFilename(filename);
+    if (downloadedNames.has(filename)) { console.log("[Skip existing]", filename); return; }
+    downloadedNames.add(filename);
     const u = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = u; a.download = filename;
@@ -598,12 +627,10 @@
       const imgItems = imgs.map((url, idx) => ({
         url,
         name: (b) => {
-          const t = (b.type || "").toLowerCase();
-          let ext = "jpg";
-          if (t.includes("png")) ext = "png";
-          else if (t.includes("gif")) ext = "gif";
-          else if (t.includes("webp")) ext = "webp";
-          return `civitai_image_${idx + 1}.${ext}`;
+          const hint = sanitizeFilename(filenameFromUrl(url)) || `civitai_image_${idx + 1}`;
+          const base = hint.replace(/\.(?:jpe?g|png|gif|webp)$/i, "");
+          const ext = extFromBlob(b) || (hint.match(/\.(jpe?g|png|gif|webp)$/i)?.[1]) || "jpg";
+          return `${base}.${ext}`;
         }
       }));
       await runQueue(imgItems, "images");
@@ -615,12 +642,10 @@
         const imgItems = pageImgs.map((url, idx) => ({
           url,
           name: (b) => {
-            const t = (b.type || "").toLowerCase();
-            let ext = "jpg";
-            if (t.includes("png")) ext = "png";
-            else if (t.includes("gif")) ext = "gif";
-            else if (t.includes("webp")) ext = "webp";
-            return `civitai_image_${idx + 1}.${ext}`;
+            const hint = sanitizeFilename(filenameFromUrl(url)) || `civitai_image_${idx + 1}`;
+            const base = hint.replace(/\.(?:jpe?g|png|gif|webp)$/i, "");
+            const ext = extFromBlob(b) || (hint.match(/\.(jpe?g|png|gif|webp)$/i)?.[1]) || "jpg";
+            return `${base}.${ext}`;
           }
         }));
         await runQueue(imgItems, "images");
@@ -636,7 +661,12 @@
       log(`🎞 Found ${vids.length} videos`);
       const vidItems = vids.map((url, idx) => ({
         url,
-        name: () => `civitai_video_${idx + 1}.mp4`,
+        name: (b) => {
+          const hint = sanitizeFilename(filenameFromUrl(url)) || `civitai_video_${idx + 1}`;
+          const base = hint.replace(/\.(?:mp4)$/i, "");
+          const ext = extFromBlob(b) || (hint.match(/\.(mp4)$/i)?.[1]) || "mp4";
+          return `${base}.${ext}`;
+        }
       }));
       await runQueue(vidItems, "videos");
     } else {
