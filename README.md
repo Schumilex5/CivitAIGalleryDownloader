@@ -8,4 +8,4 @@ Hi. This was made for personal use, it may have bugs I don't know about, but it 
 ###### You can pin the extension now and start it by clicking on it.
 
 ## Known Bugs:
--
+- When maximum parallel downloads are set higher than 3 not all images may be downloaded, leave it on default for now
