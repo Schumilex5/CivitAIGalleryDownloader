@@ -246,7 +246,7 @@ const savedSize = loadSize();
     padding: "4px",
     borderTop: "1px solid rgba(255,255,255,0.15)",
   });
-  credit.textContent = "Made by Mia Iceberg — v3.5";
+  credit.textContent = "Made by Mia Iceberg — v3.6.0";
 
   mainView.append(controls, body, barsWrap, statusLine, credit);
 
@@ -649,44 +649,78 @@ const savedSize = loadSize();
     for (const c of currentControllers) { try { c.abort(); } catch {} }
     currentControllers.clear();
   }
-  async function fetchWithProgress(url, timeoutMs, workerIndex, label) {
+  
+async function fetchWithProgress(url, timeoutMs, workerIndex, label) {
+  let attempt = 0;
+  const maxAttempts = 3;
+  while (attempt < maxAttempts) {
+    attempt++;
     const controller = new AbortController();
     currentControllers.add(controller);
     const { signal } = controller;
-    const to = setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
+    const hardTimeout = setTimeout(() => {
+      console.warn(`[CivitAI Script] Hard timeout after ${timeoutMs}ms for ${label}, aborting...`);
+      try { controller.abort(); } catch {}
+    }, timeoutMs);
 
-    const res = await fetch(url, { signal, cache: "no-store" });
-    clearTimeout(to);
-    currentControllers.delete(controller);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    try {
+      const res = await fetch(url, { signal, cache: "no-store" });
+      clearTimeout(hardTimeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const total = +res.headers.get("content-length") || 0;
-    const reader = res.body?.getReader();
-    if (!reader) {
-      const b = await res.blob();
-      setWorkerProgress(workerIndex, 100, `${label} (100%)`);
-      return b;
-    }
-
-    const chunks = [];
-    let received = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) {
-        const pct = (received / total) * 100;
-        setWorkerProgress(workerIndex, pct, `${label} (${pct.toFixed(0)}%)`);
-      } else {
-        const cycle = (received % (512 * 1024)) / (512 * 1024);
-        setWorkerProgress(workerIndex, cycle * 100, `${label} (stream)`);
+      const total = +res.headers.get("content-length") || 0;
+      const reader = res.body?.getReader();
+      if (!reader) {
+        const b = await res.blob();
+        setWorkerProgress(workerIndex, 100, `${label} (100%)`);
+        currentControllers.delete(controller);
+        return b;
       }
-      if (isPaused) throw new Error("Paused");
+
+      const chunks = [];
+      let received = 0;
+      let lastChunkTime = Date.now();
+      const checkInterval = setInterval(() => {
+        if (Date.now() - lastChunkTime > 10000) {
+          console.warn(`[CivitAI Script] Timeout: no data from ${label} for 10s, aborting`);
+          try { controller.abort(); } catch {}
+        }
+      }, 2000);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        lastChunkTime = Date.now();
+        if (total > 0) {
+          const pct = (received / total) * 100;
+          setWorkerProgress(workerIndex, pct, `${label} (${pct.toFixed(0)}%)`);
+        } else {
+          const cycle = (received % (512 * 1024)) / (512 * 1024);
+          setWorkerProgress(workerIndex, cycle * 100, `${label} (stream)`);
+        }
+        if (isPaused) throw new Error("Paused");
+      }
+      clearInterval(checkInterval);
+      currentControllers.delete(controller);
+      const type = res.headers.get("content-type") || "";
+      return new Blob(chunks, { type });
+    } catch (e) {
+      clearTimeout(hardTimeout);
+      currentControllers.delete(controller);
+      if (attempt < maxAttempts && (e.name === "AbortError" || /timeout|network|fetch/i.test(e.message))) {
+        console.warn(`[CivitAI Script] Retry ${attempt}/${maxAttempts} for ${label} due to: ${e.message}`);
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      } else {
+        console.warn(`[CivitAI Script] Failed ${label}: ${e.message}`);
+        throw e;
+      }
     }
-    const type = res.headers.get("content-type") || "";
-    return new Blob(chunks, { type });
   }
+}
+
   async function saveBlob(blob, filename) {
     const u = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -773,6 +807,7 @@ const savedSize = loadSize();
         log("⚠️ No images found", "#f55");
       }
     } else {
+      setStatus(`images: 0/${imgs.length}`);
       await downloadImages(imgs);
     }
 
@@ -823,6 +858,8 @@ const savedSize = loadSize();
     if (!settings.keepVisible) setTimeout(() => box.remove(), 3000);
   }
 
+  
+  
   // =================================
   // Start
   // =================================
@@ -831,97 +868,90 @@ const savedSize = loadSize();
 })();
 
 
-// ===================================
-// Watchdog for stalled progress (auto-restart)
-// ===================================
-let __lastProgressTime = Date.now();
-let __restartCount = 0;
-const __maxRestarts = 3;
 
-const __checkStall = async () => {
-  while (true) {
-    await new Promise(r => setTimeout(r, 1000));
-    if (Date.now() - __lastProgressTime > 5000) {
-      if (__restartCount < __maxRestarts) {
-        console.warn(`[CivitAI Script] Detected stall >5s. Restarting... (${__restartCount+1}/${__maxRestarts})`);
-        __restartCount++;
-        try { stopAllActive(); hideAllWorkerBars(); } catch {}
-        try { await runAll(); } catch {}
-        __lastProgressTime = Date.now();
-      } else {
-        console.warn("[CivitAI Script] Stalled 3 times, giving up auto-restart.");
-        break;
-      }
+  // ===================================
+  // Watchdog for stalled progress (auto-restart) — v3.5.8 (load-safe)
+  // ===================================
+  (async function initWatchdog() {
+    // Wait until main functions exist
+    while (typeof setWorkerProgress !== "function" || typeof runQueue !== "function" || typeof stopAllActive !== "function") {
+      await new Promise(r => setTimeout(r, 500));
     }
-  }
-};
-__checkStall();
 
+    if (window.__watchdogActive) return;
+    window.__watchdogActive = true;
 
+    window.__lastProgressTime = Date.now();
+    window.__restartCount = 0;
+    window.__maxRestarts = 5;
+    window.__queueState = { phase: "idle", total: 0, completed: 0 };
 
-/* ==== Overrides injected for v3.5 ==== */
+    // Hook into progress updates safely
+    if (!window.__hookedProgress) {
+      window.__hookedProgress = true;
+      window._origSetWorkerProgress = window._origSetWorkerProgress || setWorkerProgress;
+      setWorkerProgress = function(i, pct, text) {
+        window.__lastProgressTime = Date.now();
+        if (window.__restartCount > 0) {
+          console.log(`[CivitAI Script] Progress resumed after restart (retries so far: ${window.__restartCount})`);
+          window.__restartCount = 0;
+        }
+        return window._origSetWorkerProgress(i, pct, text);
+      };
+    }
 
-function collectVideos(scopeEl) {
-  const s = new Set();
-  const badVideo = (el) => {
-    if (!el) return true;
-    return !!el.closest('[class*="CreatorCard_"], [class*="EdgeVideo_iosScroll_"], [class*="mantine-Avatar"], [class*="Header_"], [class*="Footer_"], [class*="Logo"]');
-  };
-  const sources = Array.from(scopeEl.querySelectorAll('video source[type="video/mp4"]'))
-    .concat(Array.from(document.querySelectorAll('video source[type="video/mp4"]')));
+    // Wrap runQueue safely
+    if (!window.__hookedRunQueue) {
+      window.__hookedRunQueue = true;
+      window._origRunQueue = window._origRunQueue || runQueue;
+      runQueue = async function(items, kind) {
+        window.__queueState.phase = kind;
+        window.__queueState.total = (items && items.length) || 0;
+        window.__queueState.completed = 0;
 
-  const list = sources
-    .map(v => ({ el: v.closest('video'), url: (v.src || v.getAttribute('src') || '').split('?')[0] }))
-    .filter(({ el, url }) => {
-      if (!url || !/^https?:\/\//i.test(url)) return false;
-      if (badVideo(el)) return false;
-      const r = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
-      if (r.width < 300 || r.height < 200) return false;
-      return true;
-    });
+        window._origSetStatus = window._origSetStatus || setStatus;
+        setStatus = function(t) {
+          const m = String(t || '').match(/(\d+)\s*\/\s*(\d+)/);
+          if (m) {
+            window.__queueState.completed = parseInt(m[1], 10);
+            window.__queueState.total = parseInt(m[2], 10);
+          }
+          return window._origSetStatus(t);
+        };
 
-  return list.map(({ url }) => url).filter(u => !s.has(u) && s.add(u));
-}
+        try {
+          await window._origRunQueue(items, kind);
+        } finally {
+          window.__queueState.phase = "idle";
+        }
+      };
+    }
 
-async function runQueue(items, kind) {
-  if (!items || !items.length) return;
+    window.__civitaiAbortAll = () => { try { stopAllActive(); } catch{} };
+    window.__civitaiRunAll = () => runAll();
+    window.__civitaiProgress = () => ({ ...window.__queueState, active: currentControllers.size });
 
-  let nextIndex = 0;
-  let completed = 0;
-  const total = items.length;
-  setStatus(`${kind}: 0/${total}`);
+    // Periodic stall monitor
+    (async function __stallWatchdog() {
+      while (true) {
+        await new Promise(r => setTimeout(r, 1000));
+        const elapsed = Date.now() - window.__lastProgressTime;
+        const remaining = Math.max(0, (window.__queueState.total || 0) - (window.__queueState.completed || 0));
+        const active = currentControllers.size;
 
-  const getNext = () => (nextIndex < total ? nextIndex++ : null);
-  const workers = Array.from({ length: settings.concurrency }, (_, i) => worker(i));
-
-  async function worker(i) {
-    while (true) {
-      if (isPaused) return;
-      const idx = getNext();
-      if (idx === null) { hideWorkerBar(i); return; }
-
-      const it = items[idx];
-      try {
-        setWorkerProgress(i, 0, `${kind.slice(0, -1)} ${idx + 1}/${total}`);
-        const blob = await fetchWithProgress(it.url, it.timeout, i, `${kind.slice(0, -1)} ${idx + 1}/${total}`);
-        await saveBlob(blob, it.name(blob));
-        completed++;
-        setStatus(`${kind}: ${completed}/${total}`);
-        setWorkerProgress(i, 100, `Saved ${idx + 1}`);
-      } catch (e) {
-        if (e && (e.name === "AbortError" || e.message === "Paused")) {
-          hideWorkerBar(i);
-          return;
-        } else {
-          setWorkerProgress(i, 0, `fail ${idx + 1}`);
+        if (remaining > 0 && elapsed > 7000) {
+          if (window.__restartCount < window.__maxRestarts) {
+            console.warn(`[CivitAI Script] Detected stall >7s (active:${active}, remaining:${remaining}). Restarting… (${window.__restartCount + 1}/${window.__maxRestarts})`);
+            window.__restartCount++;
+            try { stopAllActive(); hideAllWorkerBars(); } catch {}
+            try { await runAll(); } catch (e) { console.warn("Restart failed:", e); }
+            window.__lastProgressTime = Date.now();
+          } else {
+            console.warn(`[CivitAI Script] Gave up after ${window.__maxRestarts} restarts, but ${remaining} item(s) still remain.`);
+            window.__lastProgressTime = Date.now();
+          }
         }
       }
-      setTimeout(() => hideWorkerBar(i), 180);
-      await new Promise(r => requestAnimationFrame(r));
-      await sleep(kind === "images" ? 200 : 340);
-    }
-  }
-
-  await Promise.all(workers);
-}
+    })();
+  })();
 
