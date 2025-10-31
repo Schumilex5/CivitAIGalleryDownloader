@@ -1,30 +1,38 @@
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return;
+  if (!tab || !tab.id || !tab.url || !/^https?:/i.test(tab.url)) {
+    return; // ignore non-http(s) or missing tabs
+  }
 
+  // Try to stop previous
   try {
-    // 1️⃣ Attempt to send a STOP signal to existing instance
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
-        if (window.__CIVITAI_DL_ACTIVE__) {
-          console.log("[CivitAI Script] Stopping previous instance…");
-          try {
+        try {
+          if (window.__CIVITAI_DL_ACTIVE__) {
             window.__CIVITAI_DL_ACTIVE__.abort?.();
-            document.querySelector("#civitai-dl-popup")?.remove();
-          } catch (e) {
-            console.warn("Error cleaning up previous instance:", e);
           }
+          document.querySelector("#civitai-dl-popup")?.remove();
           delete window.__CIVITAI_DL_ACTIVE__;
+        } catch (e) {
+          console.warn("Cleanup error in page:", e);
         }
       }
     });
   } catch (err) {
-    console.warn("Stop signal not sent (likely no instance yet):", err);
+    // frame removed or no permission; ignore
   }
 
-  // 2️⃣ Inject a fresh new instance
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: ["content_combined.js"]
-  });
+  // Inject fresh
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content_combined.js"]
+    });
+  } catch (err) {
+    // Forward a friendly error; ignore if no receiver
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: "CIVITAI_ERROR", message: String(err && err.message || err) });
+    } catch (e) {}
+  }
 });

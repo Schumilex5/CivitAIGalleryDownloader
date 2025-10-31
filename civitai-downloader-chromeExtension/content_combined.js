@@ -4,7 +4,7 @@
   // =======================
   // Config & State (closure)
   // =======================
-  const VERSION = "v3.7.5";
+  const VERSION = "v3.7.6";
   const WALL_SETTINGS_KEY = "civitai_dl_wallpaper_settings";
   const WIN_STATE_KEY = "civitai_dl_window_state";
   const DEFAULTS = { concurrency: 3, keepVisible: true, wallpaper: null, alpha: 0.35 };
@@ -171,6 +171,11 @@
   const btnResume = pillBtn("Resume"); btnResume.style.display = "none";
   const btnClose = iconBtn("✖", "Hide");
   header.append(title, btnSettings, btnRestart, btnStop, btnResume, btnClose);
+  const controlsRow = document.createElement("div");
+  Object.assign(controlsRow.style, { display: "flex", gap: "8px", padding: "6px 10px 0" });
+  const btnViewLog = pillBtn("View Log");
+  btnViewLog.style.display = "none";
+  controlsRow.append(btnViewLog);
 
   // body
   const body = document.createElement("div");
@@ -192,7 +197,7 @@
 
   // Views
   const mainView = document.createElement("div");
-  mainView.append(header, body, barsWrap, statusLine, credit);
+  mainView.append(header, controlsRow, body, barsWrap, statusLine, credit);
 
   const settingsView = document.createElement("div");
   Object.assign(settingsView.style, { display: "none", padding: "10px", color: "#dfd" });
@@ -240,6 +245,58 @@
     mainView.style.display = showMain ? "" : "none";
     settingsView.style.display = showMain ? "none" : "";
   }
+
+  // ===== Error log & viewer =====
+  const errorLog = [];
+  const logPanel = document.createElement("div");
+  Object.assign(logPanel.style, {
+    display: "none",
+    margin: "6px 10px",
+    padding: "8px",
+    border: "1px solid rgba(255,0,0,0.3)",
+    borderRadius: "8px",
+    background: "rgba(0,0,0,0.35)",
+    color: "#fcc",
+    fontSize: "12px",
+    maxHeight: "160px",
+    overflowY: "auto",
+    whiteSpace: "pre-wrap"
+  });
+  mainView.insertBefore(logPanel, barsWrap);
+
+  function showError(msg) {
+    const stamp = new Date().toLocaleString();
+    const line = `[${stamp}] ${msg}`;
+    errorLog.push(line);
+    body.style.color = "#f55";
+    body.textContent = msg; // overwrite last visible message
+    btnViewLog.style.display = "";
+    logPanel.textContent = errorLog.join("\\n");
+  }
+
+  btnViewLog.onclick = () => {
+    logPanel.style.display = (logPanel.style.display === "none") ? "block" : "none";
+  };
+
+  // Receive background messages (if any)
+  try {
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.type === "CIVITAI_ERROR" && msg.message) {
+          showError(String(msg.message));
+        }
+      });
+    }
+  } catch {}
+
+  // Also support window.postMessage
+  window.addEventListener("message", (e) => {
+    try {
+      if (e && e.data && e.data.type === "CIVITAI_ERROR") {
+        showError(String(e.data.message || "Unknown error"));
+      }
+    } catch {}
+  });
 
   function iconBtn(txt, title) {
     const b = document.createElement("button");
@@ -681,7 +738,7 @@
     finishedIndicatorShown = true;
     title.textContent = "✅ Downloads complete!";
     title.style.color = "#8f8";
-    setTimeout(() => { title.textContent = `Civitai Downloader — ${VERSION}`; title.style.color = "#9f9"; }, 3000);
+    setTimeout(() => { title.textContent = `${VERSION}`; title.style.color = "#9f9"; }, 3000);
     body.textContent = "";
     if (!settings.keepVisible) setTimeout(() => box.remove(), 2500);
   }
