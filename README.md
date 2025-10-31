@@ -3,7 +3,7 @@ Hi. This was made for personal use, it may have bugs I don't know about, but it 
 ### Features:
 - Download images and mp4 files from a CivitAI model gallery
   
-### installation:
+### Installation:
 * Download the extension folder
 * Go to -> chrome://extensions/
 * Click "Load unpacked extension"
