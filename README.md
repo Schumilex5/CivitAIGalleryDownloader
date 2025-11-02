@@ -4,6 +4,7 @@ Hi. This was made for personal use, it may have bugs I don't know about, but it 
 - Download images and mp4 files from a CivitAI model gallery
   
 ### Installation:
+* Enable dev mode in the settings
 * Download the extension folder
 * Go to -> chrome://extensions/
 * Click "Load unpacked extension"
